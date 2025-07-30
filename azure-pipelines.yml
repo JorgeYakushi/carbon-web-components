@@ -1,0 +1,88 @@
+resources:
+  repositories:
+  - repository: templatesRepo
+    type: git
+    name: NOVA Portfolio/_git/PipelineTemplates
+    ref: main
+
+name: $(date:yyyyMMdd)$(rev:.r)
+
+trigger:
+  branches:
+    include:
+    - refs/heads/main
+    - refs/heads/release/*
+  paths:
+    exclude:
+    - pipelines/*
+
+pool:
+  vmImage: windows-2022
+
+variables:
+- name: BuildConfiguration
+  value: Release
+- name: BuildPlatform
+  value: any cpu
+- name: system.debug
+  value: false
+- name: SonarCloudProjectKey
+  value: gs1us_design-tokens
+- name: SonarCloudProjectName
+  value: design-tokens
+
+stages:
+- stage: Build
+  displayName: 'Build and Test'
+  jobs:
+  - job: Build
+    displayName: 'Build Job'
+    steps:
+    - checkout: self
+      fetchDepth: 0
+      
+    - template: build/sonarcloud/prep-code-analysis.yml@templatesRepo
+      parameters:
+        projectKey: $(SonarCloudProjectKey)
+        projectName: $(SonarCloudProjectName)
+        extraProperties: |
+          # Additional properties that will be passed to the scanner,
+          # Put one key=value per line, example:
+          # sonar.exclusions=**/*.bin
+          sonar.cs.opencover.reportsPaths=$(Build.SourcesDirectory)\**\*.opencover.xml
+          
+    - task: Npm@1
+      displayName: 'npm ci'
+      inputs:
+        command: install
+        workingDir: .
+        verbose: true
+        
+    - task: Npm@1
+      displayName: 'npm build'
+      inputs:
+        command: custom
+        workingDir: .
+        customCommand: run build
+        
+    - task: Npm@1
+      displayName: 'npm test'
+      inputs:
+        command: custom
+        workingDir: .
+        customCommand: run test
+        
+    - task: Npm@1
+      displayName: 'npm publish - GS1US Feed'
+      condition: |
+        or(
+          startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'),
+          eq(variables['Build.SourceBranch'], 'refs/heads/main')
+        )
+      inputs:
+        command: publish
+        workingDir: .
+        publishRegistry: useFeed
+        publishFeed: c7360e9d-c94d-4e12-b18a-9d515ffc9e43
+        
+    - template: build/sonarcloud/code-analysis.yml@templatesRepo
